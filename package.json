@@ -9,6 +9,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@gramio/types": "^9.0.2",
     "date-fns": "^4.1.0",
     "gramio": "^0.4.3"
   }
