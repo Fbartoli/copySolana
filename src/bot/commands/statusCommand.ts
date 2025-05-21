@@ -1,4 +1,4 @@
-import { Bot, Context } from "gramio";
+import { Bot, Context, MessageContext } from "gramio";
 import { db, getLastProcessedBlockSlotFromDB } from "../../db"; // Corrected path
 import { ADDRESS_TO_TRACK } from "../../config"; // Corrected path
 import { getPollingInterval } from "./startCommand"; // To check if polling is active
@@ -7,7 +7,7 @@ import { getPollingInterval } from "./startCommand"; // To check if polling is a
 // For now, this status command will only show DB slot and a generic polling status.
 
 export function registerStatusCommand(bot: Bot) {
-    bot.command("status", (context: any) => { // Using `any` for context type
+    bot.command("status", (context: MessageContext<Bot>) => { // Using `any` for context type
         const dbSlot = getLastProcessedBlockSlotFromDB(db, ADDRESS_TO_TRACK);
         const interval = getPollingInterval(); // Check current interval status
         

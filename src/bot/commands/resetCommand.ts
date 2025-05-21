@@ -1,4 +1,4 @@
-import { Bot, Context } from "gramio";
+import { Bot, Context, MessageContext } from "gramio";
 import { db, saveLastProcessedBlockSlotToDB } from "../../db"; // Corrected path
 import { fetchInitialTransactionsToDetermineLastSlot } from "../../solana/duneApi"; // Corrected path
 import { ADDRESS_TO_TRACK } from "../../config"; // Corrected path
@@ -9,7 +9,7 @@ import { clearPollingInterval } from "./startCommand"; // To stop polling if act
 // lastTransactionIdInMemory is not directly managed here but reset through block slot.
 
 export function registerResetCommand(bot: Bot) {
-    bot.command("reset", async (context: any) => { // Using `any` for context type
+    bot.command("reset", async (context: MessageContext<Bot>) => { // Using `any` for context type
         context.send("Resetting tracker state...");
         
         // Stop polling if it's active from startCommand

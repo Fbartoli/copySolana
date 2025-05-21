@@ -1,8 +1,8 @@
-import { Bot, Context } from "gramio";
+import { Bot, Context, MessageContext } from "gramio";
 import { clearPollingInterval, getPollingInterval } from "./startCommand"; // Assuming these are exported from startCommand.ts
 
 export function registerStopCommand(bot: Bot) {
-    bot.command("stop", (context: any) => { // Using `any` for context type for now
+    bot.command("stop", (context: MessageContext<Bot>) => { // Using `any` for context type for now
         const interval = getPollingInterval();
         if (interval) {
             clearPollingInterval();

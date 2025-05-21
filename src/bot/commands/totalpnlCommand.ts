@@ -1,8 +1,8 @@
-import { Bot, Context } from "gramio";
+import { Bot, Context, MessageContext } from "gramio";
 import { db, getTotalRealizedPnL } from "../../db"; // Corrected path
 
 export function registerTotalPnlCommand(bot: Bot) {
-    bot.command("totalpnl", (context: any) => { // Using `any` for context type
+    bot.command("totalpnl", (context: MessageContext<Bot>) => { // Using `any` for context type
         try {
             const pnlData = getTotalRealizedPnL(db);
 
