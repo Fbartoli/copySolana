@@ -1,4 +1,4 @@
-import { fetchLatestTransactions } from "./src/solana/duneApi";
+import { fetchLatestTransactions } from "../solana/duneApi";
 
 async function testAPI() {
     console.log("Testing Dune API...");

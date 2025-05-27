@@ -1,6 +1,6 @@
-import { fetchLatestTransactions } from "./src/solana/duneApi";
-import { parseDuneTransaction } from "./src/solana/transactionParser";
-import { db, saveParsedTransactionData, getTransactionBySignature } from "./src/db";
+import { fetchLatestTransactions } from "../solana/duneApi";
+import { parseDuneTransaction } from "../solana/transactionParser";
+import { db, saveParsedTransactionData, getTransactionBySignature } from "../db";
 
 async function testProcessing() {
     console.log("Testing transaction processing flow...\n");
