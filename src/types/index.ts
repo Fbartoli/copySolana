@@ -74,6 +74,8 @@ export interface TokenMovementRow {
 export interface TokenAcquisitionRow {
     id?: number;
     transaction_signature: string;
+    user_chat_id: string;
+    address_tracked: string;
     mint: string;
     block_time: number;
     amount_acquired: number;
@@ -85,6 +87,8 @@ export interface TokenAcquisitionRow {
 export interface TokenDisposalPnlRow {
     id?: number;
     transaction_signature: string;
+    user_chat_id: string;
+    address_tracked: string;
     mint: string;
     block_time: number;
     amount_sold: number;
@@ -92,6 +96,17 @@ export interface TokenDisposalPnlRow {
     total_sol_proceeds: number;
     cost_of_goods_sold_sol: number;
     realized_pnl_sol: number;
+}
+
+export interface PortfolioPositionRow {
+    id?: number;
+    user_chat_id: string;
+    address_tracked: string;
+    mint: string;
+    current_balance: number;
+    average_cost_basis: number;
+    total_invested: number;
+    last_updated: number;
 }
 
 export interface DuneTransaction {

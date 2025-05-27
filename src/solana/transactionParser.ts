@@ -1,23 +1,24 @@
 import type { Database } from "bun:sqlite";
 import type { DuneTransaction, ParsedTransactionResult, AcquisitionDetails, PnlDetails } from "../types";
-import { tokenCache } from "../utils/tokenCache";
-import { ADDRESS_TO_TRACK } from "../config";
+import { getTokenSymbol, fetchTokenMetadata } from "../utils/tokenCache";
 import { getAcquisitionsForFifo } from "../db/transactionQueries"; // Import for FIFO logic
 
 export function parseDuneTransaction(
-    tx: DuneTransaction, 
-    database: Database // For PnL calculations
+    tx: DuneTransaction,
+    database: Database, // For PnL calculations
+    user_chat_id: string, // New: For scoping FIFO lookups
+    tracked_solana_address: string // New: The specific address this transaction is being parsed for
 ): ParsedTransactionResult | null {
   try {
     const signature = tx.raw_transaction.transaction.signatures[0];
     const blockSlot = tx.block_slot;
-    const blockTime = tx.block_time; 
+    const blockTime = tx.block_time;
     const rawTx = tx.raw_transaction;
     
     const fee = rawTx.meta.fee / 1_000_000_000; 
     
     const walletIndex = rawTx.transaction.message.accountKeys.findIndex(
-      (key: string) => key === ADDRESS_TO_TRACK
+      (key: string) => key === tracked_solana_address
     );
     
     let solChange = 0;
@@ -29,7 +30,7 @@ export function parseDuneTransaction(
 
     const netTokenChanges = new Map<string, { change: number, decimals: number }>();
     (rawTx.meta.preTokenBalances || []).forEach((balance) => {
-        if (balance.owner === ADDRESS_TO_TRACK && balance.uiTokenAmount?.uiAmountString && typeof balance.uiTokenAmount.decimals === 'number') {
+        if (balance.owner === tracked_solana_address && balance.uiTokenAmount?.uiAmountString && typeof balance.uiTokenAmount.decimals === 'number') {
             const amount = parseFloat(balance.uiTokenAmount.uiAmountString);
             const current = netTokenChanges.get(balance.mint) || { change: 0, decimals: balance.uiTokenAmount.decimals };
             current.change -= amount;
@@ -38,7 +39,7 @@ export function parseDuneTransaction(
         }
     });
     (rawTx.meta.postTokenBalances || []).forEach((balance) => {
-        if (balance.owner === ADDRESS_TO_TRACK && balance.uiTokenAmount?.uiAmountString && typeof balance.uiTokenAmount.decimals === 'number') {
+        if (balance.owner === tracked_solana_address && balance.uiTokenAmount?.uiAmountString && typeof balance.uiTokenAmount.decimals === 'number') {
             const amount = parseFloat(balance.uiTokenAmount.uiAmountString);
             const current = netTokenChanges.get(balance.mint) || { change: 0, decimals: balance.uiTokenAmount.decimals };
             current.change += amount;
@@ -51,6 +52,18 @@ export function parseDuneTransaction(
     let pnlDetails: PnlDetails | undefined = undefined;
     let acquisitionDetails: AcquisitionDetails | undefined = undefined;
 
+    // Collect all mint addresses for metadata preloading
+    const mintAddresses = Array.from(netTokenChanges.keys());
+    
+    // Preload token metadata in background (don't wait for it)
+    if (mintAddresses.length > 0) {
+        fetchTokenMetadata(mintAddresses[0]).catch(() => null); // Start fetching for the first token
+    }
+
+    // Track multiple acquisitions and disposals for complex transactions
+    const multipleAcquisitions: AcquisitionDetails[] = [];
+    const multipleDisposals: PnlDetails[] = [];
+
     netTokenChanges.forEach((data, mint) => {
         if (Math.abs(data.change) > 1e-9) { 
             const numericAmount = Math.abs(data.change);
@@ -62,57 +75,102 @@ export function parseDuneTransaction(
                 decimals: data.decimals
             });
 
-            const tokenSymbol = tokenCache[mint] || mint;
-            if (action === "Received" && solChange < -1e-9) {
+            const tokenSymbol = getTokenSymbol(mint);
+            
+            // More flexible acquisition detection
+            if (action === "Received" && solChange < -1e-6) { // Lowered threshold
                 const amountAcquired = numericAmount;
-                const totalSolCost = Math.abs(solChange);
-                if (aggregatedTokenTransfers.length === 1 && netTokenChanges.size === 1) { 
-                     acquisitionDetails = {
-                        mint: mint,
-                        amountAcquired: amountAcquired,
-                        solCostPerUnit: totalSolCost / amountAcquired,
-                        totalSolCost: totalSolCost,
-                        tokenSymbol: tokenSymbol,
-                        decimals: data.decimals
-                    };
+                // For complex transactions, allocate SOL cost proportionally
+                const totalTokenValue = Array.from(netTokenChanges.values())
+                    .filter(change => change.change > 0)
+                    .reduce((sum, change) => sum + Math.abs(change.change), 0);
+                
+                const proportionalSolCost = totalTokenValue > 0 ? 
+                    (Math.abs(solChange) * (numericAmount / totalTokenValue)) : 
+                    Math.abs(solChange);
+                
+                const acquisitionDetail: AcquisitionDetails = {
+                    mint: mint,
+                    amountAcquired: amountAcquired,
+                    solCostPerUnit: proportionalSolCost / amountAcquired,
+                    totalSolCost: proportionalSolCost,
+                    tokenSymbol: tokenSymbol,
+                    decimals: data.decimals
+                };
+                
+                multipleAcquisitions.push(acquisitionDetail);
+                
+                // Set main acquisition for single token transactions
+                if (netTokenChanges.size === 1) {
+                    acquisitionDetails = acquisitionDetail;
                 }
-            } else if (action === "Sent" && solChange > 1e-9) { 
+            } 
+            // More flexible disposal detection
+            else if (action === "Sent" && solChange > 1e-6) { // Lowered threshold
                 const amountSold = numericAmount;
-                const totalSolProceeds = solChange; 
-                if (aggregatedTokenTransfers.length === 1 && netTokenChanges.size === 1) { 
-                    const acquisitions = getAcquisitionsForFifo(database, mint);
-                    let costOfGoodsSold = 0;
-                    let amountToCoverByFifo = amountSold;
+                
+                // For complex transactions, allocate SOL proceeds proportionally
+                const totalTokenValue = Array.from(netTokenChanges.values())
+                    .filter(change => change.change < 0)
+                    .reduce((sum, change) => sum + Math.abs(change.change), 0);
+                
+                const proportionalSolProceeds = totalTokenValue > 0 ? 
+                    (solChange * (numericAmount / totalTokenValue)) : 
+                    solChange;
+                
+                const acquisitions = getAcquisitionsForFifo(database, user_chat_id, tracked_solana_address, mint);
+                let costOfGoodsSold = 0;
+                let amountToCoverByFifo = amountSold;
 
-                    for (const acq of acquisitions) {
-                        if (amountToCoverByFifo <= 1e-9) break;
-                        const amountFromThisAcq = Math.min(acq.amount_remaining, amountToCoverByFifo);
-                        costOfGoodsSold += amountFromThisAcq * acq.sol_cost_per_unit;
-                        amountToCoverByFifo -= amountFromThisAcq;
-                    }
-                    if (amountToCoverByFifo > 1e-9) {
-                         console.warn(`PnL Warn: Could not find sufficient acquisition history for ${amountSold.toFixed(data.decimals)} of ${tokenSymbol} (Mint: ${mint}). PnL might be inaccurate. Missing: ${amountToCoverByFifo.toFixed(data.decimals)}`);
-                    }
+                for (const acq of acquisitions) {
+                    if (amountToCoverByFifo <= 1e-9) break;
+                    const amountFromThisAcq = Math.min(acq.amount_remaining, amountToCoverByFifo);
+                    costOfGoodsSold += amountFromThisAcq * acq.sol_cost_per_unit;
+                    amountToCoverByFifo -= amountFromThisAcq;
+                }
+                
+                if (amountToCoverByFifo > 1e-9) {
+                    console.warn(`PnL Warn: Could not find sufficient acquisition history for ${amountSold.toFixed(data.decimals)} of ${tokenSymbol} (Mint: ${mint}) on wallet ${tracked_solana_address}. PnL might be inaccurate. Missing: ${amountToCoverByFifo.toFixed(data.decimals)}`);
+                }
 
-                    const realizedPnl = totalSolProceeds - costOfGoodsSold;
-                    pnlDetails = {
-                        mint: mint,
-                        pnlInSol: realizedPnl,
-                        costBasisInSol: costOfGoodsSold,
-                        proceedsInSol: totalSolProceeds,
-                        amountSold: amountSold, 
-                        tokenSymbol: tokenSymbol,
-                        decimals: data.decimals
-                    };
+                const realizedPnl = proportionalSolProceeds - costOfGoodsSold;
+                const pnlDetail: PnlDetails = {
+                    mint: mint,
+                    pnlInSol: realizedPnl,
+                    costBasisInSol: costOfGoodsSold,
+                    proceedsInSol: proportionalSolProceeds,
+                    amountSold: amountSold, 
+                    tokenSymbol: tokenSymbol,
+                    decimals: data.decimals
+                };
+                
+                multipleDisposals.push(pnlDetail);
+                
+                // Set main disposal for single token transactions
+                if (netTokenChanges.size === 1) {
+                    pnlDetails = pnlDetail;
                 }
             }
         }
     });
-      
+
+    // If we have multiple acquisitions/disposals, use the largest one as the primary
+    if (!acquisitionDetails && multipleAcquisitions.length > 0) {
+        acquisitionDetails = multipleAcquisitions.reduce((largest, current) => 
+            current.totalSolCost > largest.totalSolCost ? current : largest
+        );
+    }
+    
+    if (!pnlDetails && multipleDisposals.length > 0) {
+        pnlDetails = multipleDisposals.reduce((largest, current) => 
+            Math.abs(current.proceedsInSol) > Math.abs(largest.proceedsInSol) ? current : largest
+        );
+    }
+
     const logMessages = rawTx.meta.logMessages || [];
     let transactionType = "Unknown";
-    if (acquisitionDetails) transactionType = "Token Purchase (SOL)";
-    else if (pnlDetails) transactionType = "Token Sale (SOL)";
+    if (acquisitionDetails || multipleAcquisitions.length > 0) transactionType = "Token Purchase (SOL)";
+    else if (pnlDetails || multipleDisposals.length > 0) transactionType = "Token Sale (SOL)";
     else {
         for (const log of logMessages) {
           if (log.includes("Instruction: Sell")) { transactionType = "Token Sale"; break; }
@@ -127,7 +185,7 @@ export function parseDuneTransaction(
     let message = `📊 *${transactionType}* at ${timestampLocale}\n`;
     if (aggregatedTokenTransfers.length > 0) {
       aggregatedTokenTransfers.forEach(transfer => {
-        const tokenSymbolDisplay = tokenCache[transfer.mint] || transfer.mint;
+        const tokenSymbolDisplay = getTokenSymbol(transfer.mint);
         message += `${transfer.action} ${transfer.amount} ${tokenSymbolDisplay}\n`;
       });
     }
@@ -154,13 +212,13 @@ export function parseDuneTransaction(
     message += `TX: https://solscan.io/tx/${signature}`;
       
     if (walletIndex === -1 && aggregatedTokenTransfers.length === 0 && !pnlDetails && !acquisitionDetails) {
-         console.log(`Transaction ${signature} (Slot: ${blockSlot}) does not directly involve ${ADDRESS_TO_TRACK} in SOL/Token balances.`);
+         console.log(`Transaction ${signature} (Slot: ${blockSlot}) does not directly involve ${tracked_solana_address} in SOL/Token balances.`);
          if (transactionType === "Unknown") {
-             message = `Interaction detected for ${ADDRESS_TO_TRACK} at ${timestampLocale}\nTX: https://solscan.io/tx/${signature}\nFee: ${fee.toFixed(9)} SOL`;
+             message = `Interaction detected for ${tracked_solana_address} at ${timestampLocale}\nTX: https://solscan.io/tx/${signature}\nFee: ${fee.toFixed(9)} SOL`;
          }
     }
     
-    return {
+    const parsedResult: ParsedTransactionResult = {
         message,
         fee,
         solChange,
@@ -173,6 +231,8 @@ export function parseDuneTransaction(
         blockSlot,
         blockTime
     };
+
+    return parsedResult;
 
   } catch (error) {
     console.error(`Error parsing transaction ${tx?.raw_transaction?.transaction?.signatures[0]}:`, error);

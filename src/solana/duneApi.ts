@@ -1,4 +1,4 @@
-import { ADDRESS_TO_TRACK, DUNE_API_OPTIONS, API_TIMEOUT } from "../config";
+import { DUNE_API_OPTIONS, API_TIMEOUT } from "../config";
 import type { DuneApiResponse, DuneTransaction } from "../types";
 
 export async function fetchLatestTransactions(address: string, limit: number = 1): Promise<DuneTransaction[]> {
@@ -31,7 +31,7 @@ export async function fetchInitialTransactionsToDetermineLastSlot(trackedAddress
     // However, sticking to user's intent if they want to get an older slot as baseline.
     // For now, let's use a moderate number like 20 for stability, then user can adjust config.
     // The specific logic of which transaction to use (e.g., transactions[99]) is handled by the caller.
-    const initialFetchLimit = 100; // As per user's last change in original index.ts
+    const initialFetchLimit = 1; // As per user's last change in original index.ts
     console.log(`Fetching initial ${initialFetchLimit} transactions to determine starting block slot for ${trackedAddress}...`)
     const transactions = await fetchLatestTransactions(trackedAddress, initialFetchLimit);
     if (transactions.length > 0) {
