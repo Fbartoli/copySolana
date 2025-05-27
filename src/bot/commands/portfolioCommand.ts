@@ -130,7 +130,7 @@ async function fetchCurrentPrices(mints: string[]): Promise<{ [mint: string]: nu
     try {
         // Try Jupiter Price API v2
         const mintList = mints.join(',');
-        const response = await fetch(`https://price.jup.ag/v4/price?ids=${mintList}`, {
+        const response = await fetch(`https://lite-api.jup.ag/price/v2/price?ids=${mintList}`, {
             headers: {
                 'Accept': 'application/json',
             },
@@ -155,7 +155,7 @@ async function fetchCurrentPrices(mints: string[]): Promise<{ [mint: string]: nu
         // Fallback: Try to get individual prices
         const pricePromises = mints.slice(0, 5).map(async (mint) => { // Limit to 5 to avoid rate limits
             try {
-                const response = await fetch(`https://price.jup.ag/v4/price?ids=${mint}`, {
+                const response = await fetch(`https://lite-api.jup.ag/price/v2/price?ids=${mint}`, {
                     signal: AbortSignal.timeout(3000)
                 });
                 if (response.ok) {

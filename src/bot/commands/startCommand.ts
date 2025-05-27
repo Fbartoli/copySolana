@@ -7,6 +7,9 @@ import {
     getTransactionBySignature,
     getAllTrackedWalletsDB
 } from "../../db";
+import { TradeExecutor } from "../../solana/tradeExecutor";
+import { JupiterSwap } from "../../solana/jupiterSwap";
+import { Connection } from "@solana/web3.js";
 import type { TrackedWalletEntry } from "../../db";
 import { fetchInitialTransactionsToDetermineLastSlot, fetchLatestTransactions } from "../../solana/duneApi";
 import { parseDuneTransaction } from "../../solana/transactionParser";
@@ -56,6 +59,76 @@ async function processTransaction(
         console.log(`Sent notification for tx ${parsedData.signature} to ${user_chat_id} for address ${solana_address}`);
         
         saveParsedTransactionData(db, tx, parsedData, user_chat_id, solana_address);
+        
+        // Check if copy trading is enabled for this user
+        const copyConfig = db.query<{
+            enabled: number;
+            wallet_private_key: string;
+            rpc_url: string;
+            max_position_size: number;
+            slippage_tolerance: number;
+            auto_approve: number;
+            proportional_sizing: number;
+            sizing_ratio: number;
+        }, [string]>(`
+            SELECT * FROM copy_trading_config WHERE user_chat_id = ?
+        `).get(user_chat_id);
+
+        if (copyConfig && copyConfig.enabled && copyConfig.wallet_private_key) {
+            // Execute copy trade
+            try {
+                const tradeExecutor = new TradeExecutor(
+                    copyConfig.rpc_url,
+                    copyConfig.wallet_private_key,
+                    {
+                        enabled: true,
+                        maxPositionSize: copyConfig.max_position_size,
+                        slippageTolerance: copyConfig.slippage_tolerance,
+                        autoApprove: copyConfig.auto_approve === 1,
+                        proportionalSizing: copyConfig.proportional_sizing === 1,
+                        sizingRatio: copyConfig.sizing_ratio
+                    }
+                );
+
+                const execution = await tradeExecutor.executeCopyTrade(parsedData, solana_address);
+                
+                // Save execution history
+                db.query(`
+                    INSERT INTO copy_trading_history 
+                    (user_chat_id, original_tx, copy_tx, status, reason, executed_at, original_wallet, token_mint, trade_type, amount, sol_value)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    user_chat_id,
+                    parsedData.signature,
+                    execution.copyTx || null,
+                    execution.status,
+                    execution.reason || null,
+                    execution.executedAt || Date.now(),
+                    solana_address,
+                    parsedData.acquisitionDetails?.mint || parsedData.pnlDetails?.mint || '',
+                    parsedData.acquisitionDetails ? 'BUY' : 'SELL',
+                    parsedData.acquisitionDetails?.amountAcquired || parsedData.pnlDetails?.amountSold || 0,
+                    parsedData.acquisitionDetails?.totalSolCost || parsedData.pnlDetails?.proceedsInSol || 0
+                );
+
+                // Notify user of copy trade execution
+                if (execution.status === 'executed') {
+                    await bot.api.sendMessage({
+                        chat_id: user_chat_id,
+                        text: `✅ Copy trade executed!\nTx: ${execution.copyTx}`,
+                        parse_mode: "Markdown"
+                    });
+                } else if (execution.status === 'failed') {
+                    await bot.api.sendMessage({
+                        chat_id: user_chat_id,
+                        text: `❌ Copy trade failed: ${execution.reason}`,
+                        parse_mode: "Markdown"
+                    });
+                }
+            } catch (copyError) {
+                console.error(`Error executing copy trade for ${user_chat_id}:`, copyError);
+            }
+        }
         
         const walletKey = getWalletKey(user_chat_id, solana_address);
         lastProcessedData.set(walletKey, { blockSlot: parsedData.blockSlot, txId: parsedData.signature });

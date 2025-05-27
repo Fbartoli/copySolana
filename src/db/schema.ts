@@ -160,4 +160,40 @@ export function checkAndSetupDatabase(database: Database) {
       // Run migration to add missing columns to existing installations
       migrateDatabase(database);
     }
+
+    // Copy Trading Configuration Table
+    database.query(`
+      CREATE TABLE IF NOT EXISTS copy_trading_config (
+        user_chat_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        max_position_size REAL NOT NULL DEFAULT 1.0,
+        slippage_tolerance REAL NOT NULL DEFAULT 0.5,
+        auto_approve INTEGER NOT NULL DEFAULT 0,
+        proportional_sizing INTEGER NOT NULL DEFAULT 0,
+        sizing_ratio REAL DEFAULT 1.0,
+        wallet_private_key TEXT,
+        rpc_url TEXT DEFAULT 'https://api.mainnet-beta.solana.com',
+        FOREIGN KEY (user_chat_id) REFERENCES tracked_wallets(user_chat_id) ON DELETE CASCADE
+      );
+    `).run();
+
+    // Copy Trading Execution History
+    database.query(`
+      CREATE TABLE IF NOT EXISTS copy_trading_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_chat_id TEXT NOT NULL,
+        original_tx TEXT NOT NULL,
+        copy_tx TEXT,
+        status TEXT NOT NULL,
+        reason TEXT,
+        executed_at INTEGER,
+        original_wallet TEXT NOT NULL,
+        token_mint TEXT NOT NULL,
+        trade_type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        sol_value REAL NOT NULL,
+        FOREIGN KEY (user_chat_id) REFERENCES tracked_wallets(user_chat_id) ON DELETE CASCADE,
+        FOREIGN KEY (original_tx) REFERENCES transactions(signature) ON DELETE CASCADE
+      );
+    `).run();
 } 

@@ -166,4 +166,21 @@ export interface TokenBalanceMeta {
     };
     owner: string;
     programId: string;
+}
+
+export interface CopyTradingConfig {
+    enabled: boolean;
+    maxPositionSize: number; // Maximum SOL per trade
+    slippageTolerance: number; // Percentage
+    autoApprove: boolean; // Auto-execute trades or require confirmation
+    proportionalSizing: boolean; // Scale trades based on account size
+    sizingRatio?: number; // If proportional, what ratio to use
+}
+
+export interface TradeExecution {
+    originalTx: string;
+    copyTx?: string;
+    status: 'pending' | 'executed' | 'failed' | 'skipped';
+    reason?: string;
+    executedAt?: number;
 } 

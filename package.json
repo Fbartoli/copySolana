@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@gramio/types": "^9.0.2",
+    "@jup-ag/api": "^6.0.42",
+    "@solana/web3.js": "^1.98.2",
     "date-fns": "^4.1.0",
     "gramio": "^0.4.3"
   }
